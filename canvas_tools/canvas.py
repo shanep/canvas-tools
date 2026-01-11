@@ -6,35 +6,6 @@ import json
 endpoint = 'https://boisestatecanvas.instructure.com/api/v1/courses'
 headers = {'Authorization': os.getenv('CANVAS_TOKEN')}
 
-class Student:
-    def __init__(self, user,course_id, assignment_id):
-        self.__user = user
-
-        self.__update = False
-        self.__course_id = course_id
-        self.__assignment_id = assignment_id
-        self.__comment = ""
-
-    def __str__(self):
-        return str(self.user)
-
-
-    @property
-    def user(self):
-        return self.__user
-
-    @user.setter
-    def user(self, user):
-        self.__user = user
-
-    @property
-    def bsu_username(self):
-        if self.__user['name'] == 'Test Student':
-            return 'test_student'
-        else:
-            return self.__user['login_id'].lower()
-
-
 def __execute_get(param, url=""):
     request = requests.get(endpoint + url ,params=param, headers=headers)
     if not request.ok:
