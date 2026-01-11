@@ -1,0 +1,72 @@
+# canvas_tools/canvas.py
+import os
+import requests
+import json
+
+endpoint = 'https://boisestatecanvas.instructure.com/api/v1/courses'
+headers = {'Authorization': os.getenv('CANVAS_TOKEN')}
+
+class Student:
+    def __init__(self, user,course_id, assignment_id):
+        self.__user = user
+
+        self.__update = False
+        self.__course_id = course_id
+        self.__assignment_id = assignment_id
+        self.__comment = ""
+
+    def __str__(self):
+        return str(self.user)
+
+
+    @property
+    def user(self):
+        return self.__user
+
+    @user.setter
+    def user(self, user):
+        self.__user = user
+
+    @property
+    def bsu_username(self):
+        if self.__user['name'] == 'Test Student':
+            return 'test_student'
+        else:
+            return self.__user['login_id'].lower()
+
+
+def __execute_get(param, url=""):
+    request = requests.get(endpoint + url ,params=param, headers=headers)
+    if not request.ok:
+        print(f'Failed to connect {request.status_code} - {request.text}')
+        exit(request.status_code)
+    return json.loads(request.text)
+
+def get_courses():
+    params = {'state[]':'available','enrollment_type':'teacher','per_page': 40}
+    courses = __execute_get(params)
+    return courses
+
+def get_assignments(course_id):
+    param = {'per_page':150}
+    url_postfix = f'/{course_id}/assignments'
+    assignments = __execute_get(param,url_postfix)
+    return assignments
+
+def get_students(course_id):
+    param = {'per_page':150,'enrollment_type[]':'student'}
+    url_postfix = f'/{course_id}/users'
+    students = __execute_get(param,url_postfix)
+    return students
+
+def get_submissions(course_id,assignment_id):
+    param = {'per_page':150}
+    url_postfix = f'/{course_id}/assignments/{assignment_id}/submissions'
+    submissions = __execute_get(param,url_postfix)
+    return submissions
+
+def get_assignment(course_id, assignment_id):
+    param = {'per_page':150}
+    url_postfix = f'/{course_id}/assignments/{assignment_id}/'
+    assignment = __execute_get(param,url_postfix)
+    return assignment

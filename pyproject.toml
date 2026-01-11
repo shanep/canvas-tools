@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "canvas-tools"
+version = "0.1.0"
+description = "Small CLI utilities for canvas tools"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{name = "shane"}]
+license = {text = "MIT"}
+
+dependencies = [
+	"requests==2.32.5",
+	"python-dotenv==1.2.1",
+]
+
+[project.scripts]
+canvas-tools = "canvas_tools.cli:main"
