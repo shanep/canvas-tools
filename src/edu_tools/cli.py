@@ -7,7 +7,12 @@ parser.add_argument("-a", help="List all assignments for course", metavar="<cour
 parser.add_argument("-c", help="List all active canvas courses", action='store_true')
 parser.add_argument("-u", help="List all users in a canvas course", metavar="<course_id>")
 parser.add_argument("-s", help="List all submissions for assignment", nargs=2, metavar=('<course_id>', '<assignment_id>'))
-parser.add_argument('-g', help="Create and share Google Doc", nargs=2, metavar=('<title>', '<folder_id>'))
+parser.add_argument(
+    '-g',
+    help="Create and share Google Doc; pass title and optional folder_id",
+    nargs='+',
+    metavar=('title', 'folder_id'),
+)
 
 args = parser.parse_args()
 
@@ -32,10 +37,13 @@ def main(argv=None):
         for sub in submissions:
             print(f'{sub["user_id"]} - {sub["grade"]}')
     elif args.g:
+        if len(args.g) > 2:
+            parser.error("-g accepts a title and optional folder_id only")
+
         title = args.g[0]
-        folder_id = args.g[1]
+        folder_id = args.g[1] if len(args.g) == 2 else None
         doc_id = google.create_doc(title, folder_id)
-        google.insert_text(doc_id, f'Document Title: {title}\n\n', 1)
+        #google.insert_text(doc_id, f'Document Title: {title}\n\n', 1)
 
         print(f'Created and shared document with ID: {doc_id}')
     else:

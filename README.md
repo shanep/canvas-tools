@@ -39,6 +39,10 @@ canvas-tools -h
 - Runtime dependencies are declared in `pyproject.toml` (`requests`, `python-dotenv`, Google API clients).
 - The package exposes a console script entry point `canvas-tools` defined in `pyproject.toml`.
 
+- Google API references:
+  - [Google API Client Library](https://googleapis.github.io/google-api-python-client/docs/)
+  - [Python Quickstart](https://developers.google.com/docs/api/quickstart/python)
+
 ## Project Structure
 
 - `src/`: Contains the source code for the project.
