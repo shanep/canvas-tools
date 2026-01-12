@@ -1,0 +1,9 @@
+{
+    "cSpell.words": [
+        "creds",
+        "dotenv",
+        "googleapiclient"
+    ],
+    "python.analysis.extraPaths": ["${workspaceFolder}/src"],
+    "python.autoComplete.extraPaths": ["${workspaceFolder}/src"]
+}

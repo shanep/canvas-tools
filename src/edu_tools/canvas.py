@@ -2,9 +2,7 @@
 import os
 import requests
 import json
-
-endpoint = 'https://boisestatecanvas.instructure.com/api/v1/courses'
-headers = {'Authorization': os.getenv('CANVAS_TOKEN')}
+from edu_tools import endpoint, headers
 
 def __execute_get(param, url=""):
     request = requests.get(endpoint + url ,params=param, headers=headers)

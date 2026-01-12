@@ -3,18 +3,21 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "canvas-tools"
+name = "edu-tools"
 version = "0.1.0"
-description = "Small CLI utilities for canvas tools"
+description = "Small CLI utilities education stuff"
 readme = "README.md"
 requires-python = ">=3.8"
-authors = [{name = "shane"}]
+authors = [{name = "Shane K. Panter"}]
 license = {text = "MIT"}
 
 dependencies = [
 	"requests==2.32.5",
 	"python-dotenv==1.2.1",
+	"google-api-python-client==2.154.0",
+	"google-auth-httplib2==0.2.0",
+	"google-auth-oauthlib==1.2.1",
 ]
 
 [project.scripts]
-canvas-tools = "canvas_tools.cli:main"
+edu-tools = "edu_tools.cli:main"
