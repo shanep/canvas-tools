@@ -18,12 +18,15 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 
+
 def _get_credentials() -> Credentials:
     load_dotenv()
     GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH")
     GOOGLE_OAUTH_PATH = os.getenv("GOOGLE_OAUTH_PATH")
     if not GOOGLE_TOKEN_PATH or not GOOGLE_OAUTH_PATH:
-        raise ValueError("GOOGLE_TOKEN_PATH and GOOGLE_OAUTH_PATH must be set in environment variables.")
+        raise ValueError(
+            "GOOGLE_TOKEN_PATH and GOOGLE_OAUTH_PATH must be set in environment variables."
+        )
 
     creds: Optional[Credentials] = None
     if os.path.exists(GOOGLE_TOKEN_PATH):
@@ -46,9 +49,11 @@ def _docs_service():
     creds = _get_credentials()
     return build("docs", "v1", credentials=creds)
 
+
 def _drive_service():
     creds = _get_credentials()
     return build("drive", "v3", credentials=creds)
+
 
 def create_doc(title: str, folder_id: Optional[str] = None) -> str:
     """
@@ -71,12 +76,11 @@ def create_doc(title: str, folder_id: Optional[str] = None) -> str:
     if folder_id:
         drive = _drive_service()
         drive.files().update(
-            fileId=doc_id,
-            addParents=folder_id,
-            fields="id, parents"
+            fileId=doc_id, addParents=folder_id, fields="id, parents"
         ).execute()
 
     return doc_id
+
 
 def insert_text(document_id: str, text: str, index: int = 1) -> None:
     """
@@ -92,10 +96,14 @@ def insert_text(document_id: str, text: str, index: int = 1) -> None:
             }
         }
     ]
-    service.documents().batchUpdate(documentId=document_id, body={"requests": requests}).execute()
+    service.documents().batchUpdate(
+        documentId=document_id, body={"requests": requests}
+    ).execute()
 
 
-def replace_all_text(document_id: str, old: str, new: str, match_case: bool = True) -> int:
+def replace_all_text(
+    document_id: str, old: str, new: str, match_case: bool = True
+) -> int:
     service = _docs_service()
     requests: List[Dict[str, Any]] = [
         {
@@ -105,7 +113,11 @@ def replace_all_text(document_id: str, old: str, new: str, match_case: bool = Tr
             }
         }
     ]
-    resp = service.documents().batchUpdate(documentId=document_id, body={"requests": requests}).execute()
+    resp = (
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": requests})
+        .execute()
+    )
     # replies may be empty; replaceAllText returns an empty reply in many cases
     # so we just return 0 if we can't infer counts.
     return 0

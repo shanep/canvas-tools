@@ -1,25 +1,52 @@
-PY=python3
-.PHONY: clean distclean build config test run
+VENV ?= .venv
 
-config:
-	$(PY) -m venv .venv
-	.venv/bin/pip install --upgrade pip setuptools wheel build
-	.venv/bin/pip install -e .
+.PHONY: bootstrap install lint fmt typecheck test clean help
 
-clean:
-	rm -rf dist build *.egg-info
-	find . -name "__pycache__" -type d -exec rm -rf {} +
-	find . -name "*.pyc" -delete
+help:
+	@echo "Makefile commands:"
+	@echo "  bootstrap   - Check uv installation and sync dependencies"
+	@echo "  install     - Install the package in editable mode"
+	@echo "  lint        - Lint the code using ruff"
+	@echo "  fmt         - Format the code using ruff"
+	@echo "  typecheck   - Type check the code using pyright"
+	@echo "  test        - Run tests using pytest"
+	@echo "  clean       - Clean up build artifacts and caches"
 
-distclean: clean
-	rm -rf .venv .venv_test .pytest_cache .mypy_cache .cache
+bootstrap:
+	@echo "check the uv installation..."
+	@if ! command -v uv >/dev/null 2>&1; then \
+	  echo "uv not found."; \
+	  echo "Check https://github.com/astral-sh/uv for installation instructions."; \
+	  exit 1; \
+	else \
+	  echo "uv is installed: $$(uv --version)"; \
+	fi
+	@echo "Syncing dependencies using uv..."
+	@uv sync
 
-build:
-	$(PY) -m pip install --upgrade build setuptools wheel
-	$(PY) -m build
+lint:
+	uv run ruff check .
+
+fmt:
+	uv run ruff format .
+
+typecheck:
+	uv run pyright src tests
 
 test:
-	$(PY) -m unittest discover -s tests -p "test_*.py"
+	uv run pytest
 
-run:
-	$(PY) -m edu_tools.cli
+install:
+	uv tool install . -e
+
+build:
+	uv build
+
+clean:
+	uv cache clean
+	rm -rf $(VENV)
+	rm -rf *.egg-info
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type d -name ".ruff_cache" -exec rm -rf {} +
+	find . -type d -name ".uv" -exec rm -rf {} +
+	find . -type d -name ".pytest_cache" -exec rm -rf {} +

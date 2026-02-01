@@ -2,6 +2,7 @@
     "cSpell.words": [
         "creds",
         "dotenv",
+        "edutools",
         "googleapiclient"
     ],
     "python.analysis.extraPaths": ["${workspaceFolder}/src"],

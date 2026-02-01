@@ -14,7 +14,9 @@ load_dotenv()
 def _connect_client(region_name: Optional[str] = None):
     """Return an Amazon Connect client using the provided or default region."""
     region = region_name or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
-    session = boto3.session.Session(region_name=region) if region else boto3.session.Session()
+    session = (
+        boto3.session.Session(region_name=region) if region else boto3.session.Session()
+    )
     return session.client("connect")
 
 
@@ -56,23 +58,37 @@ def add_user_with_security_profile(
 
     resolved_instance_id = instance_id or os.getenv("AWS_CONNECT_INSTANCE_ID")
     if not resolved_instance_id:
-        raise ValueError("Instance ID is required; set AWS_CONNECT_INSTANCE_ID or pass instance_id.")
+        raise ValueError(
+            "Instance ID is required; set AWS_CONNECT_INSTANCE_ID or pass instance_id."
+        )
 
-    resolved_routing_profile_id = routing_profile_id or os.getenv("AWS_CONNECT_ROUTING_PROFILE_ID")
+    resolved_routing_profile_id = routing_profile_id or os.getenv(
+        "AWS_CONNECT_ROUTING_PROFILE_ID"
+    )
     if not resolved_routing_profile_id:
-        raise ValueError("Routing profile ID is required; set AWS_CONNECT_ROUTING_PROFILE_ID or pass routing_profile_id.")
+        raise ValueError(
+            "Routing profile ID is required; set AWS_CONNECT_ROUTING_PROFILE_ID or pass routing_profile_id."
+        )
 
     profiles = security_profile_ids
     if profiles is None:
         env_profiles = os.getenv("AWS_CONNECT_SECURITY_PROFILE_IDS", "")
         profiles = [p.strip() for p in env_profiles.split(",") if p.strip()]
     if not profiles:
-        raise ValueError("At least one security profile ID is required; set AWS_CONNECT_SECURITY_PROFILE_IDS or pass security_profile_ids.")
+        raise ValueError(
+            "At least one security profile ID is required; set AWS_CONNECT_SECURITY_PROFILE_IDS or pass security_profile_ids."
+        )
 
     if not password and not directory_user_id:
-        raise ValueError("Provide either password for Connect-managed users or directory_user_id for SAML/AD users.")
+        raise ValueError(
+            "Provide either password for Connect-managed users or directory_user_id for SAML/AD users."
+        )
 
-    identity_info: Dict[str, str] = {"FirstName": first_name, "LastName": last_name, "Email": email}
+    identity_info: Dict[str, str] = {
+        "FirstName": first_name,
+        "LastName": last_name,
+        "Email": email,
+    }
     phone_config: Dict[str, object] = {"PhoneType": phone_type}
     if phone_type == "SOFT_PHONE":
         phone_config["AutoAccept"] = auto_accept
