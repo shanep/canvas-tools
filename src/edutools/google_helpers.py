@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import os.path
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
 
@@ -10,13 +13,22 @@ from google.oauth2.credentials import Credentials as OAuthCredentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-# Scopes:
-# - documents: lets you read/write Docs content
-# - drive.file (optional): lets you view/manage files created/opened by your app
-SCOPES = [
+# Scopes for Docs and Drive
+DOCS_SCOPES = [
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/drive.file",
 ]
+
+# Scopes for Gmail
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+]
+
+# Combined scopes (for single token file)
+ALL_SCOPES = DOCS_SCOPES + GMAIL_SCOPES
+
+# For backwards compatibility
+SCOPES = DOCS_SCOPES
 
 
 def _get_credentials() -> Credentials:
@@ -121,3 +133,90 @@ def replace_all_text(
     # replies may be empty; replaceAllText returns an empty reply in many cases
     # so we just return 0 if we can't infer counts.
     return 0
+
+
+# ============================================================================
+# Gmail Functions
+# ============================================================================
+
+def _get_gmail_credentials() -> Credentials:
+    """Get credentials with Gmail scope."""
+    load_dotenv()
+    GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH")
+    GOOGLE_OAUTH_PATH = os.getenv("GOOGLE_OAUTH_PATH")
+    if not GOOGLE_TOKEN_PATH or not GOOGLE_OAUTH_PATH:
+        raise ValueError(
+            "GOOGLE_TOKEN_PATH and GOOGLE_OAUTH_PATH must be set in environment variables."
+        )
+
+    # Use a separate token file for Gmail to avoid scope conflicts
+    gmail_token_path = GOOGLE_TOKEN_PATH.replace(".json", "_gmail.json")
+
+    creds: Optional[Credentials] = None
+    if os.path.exists(gmail_token_path):
+        creds = OAuthCredentials.from_authorized_user_file(gmail_token_path, GMAIL_SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_OAUTH_PATH, GMAIL_SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        with open(gmail_token_path, "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+    if not creds:
+        raise ValueError("Failed to obtain Gmail credentials.")
+    return creds
+
+
+def _gmail_service():
+    """Get Gmail API service."""
+    creds = _get_gmail_credentials()
+    return build("gmail", "v1", credentials=creds)
+
+
+def send_email(
+    to: str,
+    subject: str,
+    body_text: str,
+    body_html: Optional[str] = None,
+    sender: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Send an email using Gmail API.
+
+    Args:
+        to: Recipient email address
+        subject: Email subject
+        body_text: Plain text body
+        body_html: Optional HTML body
+        sender: Optional sender address (defaults to authenticated user)
+
+    Returns:
+        Gmail API response dict with message id
+    """
+    service = _gmail_service()
+
+    if body_html:
+        message = MIMEMultipart("alternative")
+        message.attach(MIMEText(body_text, "plain"))
+        message.attach(MIMEText(body_html, "html"))
+    else:
+        message = MIMEText(body_text, "plain")
+
+    message["to"] = to
+    message["subject"] = subject
+    if sender:
+        message["from"] = sender
+
+    # Encode the message
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+
+    try:
+        result = service.users().messages().send(
+            userId="me",
+            body={"raw": raw}
+        ).execute()
+        return {"success": True, "message_id": result.get("id"), "error": None}
+    except Exception as e:
+        return {"success": False, "message_id": None, "error": str(e)}

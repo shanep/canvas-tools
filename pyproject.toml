@@ -3,7 +3,7 @@ requires = ["uv_build>=0.9.28,<0.10.0"]
 build-backend = "uv_build"
 
 [project.scripts]
-edutools = "edutools.cli:main"
+edutools = "edutools.cli:app"
 
 [project]
 name = "edutools"
@@ -29,6 +29,7 @@ dependencies = [
 	"google-auth-httplib2==0.2.0",
 	"google-auth-oauthlib==1.2.1",
 	"boto3>=1.34,<2.0",
+	"typer[all]>=0.9.0",
 ]
 
 [project.urls]
