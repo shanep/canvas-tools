@@ -5,19 +5,18 @@ from datetime import datetime, timezone
 
 class CanvasLMS():
     def __init__(self):
-        tmp = os.getenv("CANVAS_ENDPOINT")
-        self.headers = {"Authorization": f"Bearer {os.getenv('CANVAS_TOKEN')}"}
-        if not tmp or not self.headers["Authorization"]:
+        token = os.getenv("CANVAS_TOKEN")
+        if not token:
             raise ValueError(
-                "CANVAS_ENDPOINT and CANVAS_TOKEN must be set in environment variables."
+                "CANVAS_TOKEN not set. Add your token to ~/.config/edutools/config.toml [canvas] section."
             )
-        self.endpoint = tmp
+        self.endpoint = os.getenv("CANVAS_ENDPOINT", "https://boisestatecanvas.instructure.com")
+        self.headers = {"Authorization": f"Bearer {token}"}
 
     def __execute_get(self,param, url=""):
         request = requests.get(self.endpoint + url, params=param, headers=self.headers)
         if not request.ok:
-            print(f"Failed to connect {request.status_code} - {request.text}")
-            exit(request.status_code)
+            raise RuntimeError(f"Canvas API error {request.status_code}: {request.text}")
         return json.loads(request.text)
 
 

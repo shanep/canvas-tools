@@ -1,3 +1,5 @@
+import os
+import tomllib
 import typer
 import csv
 from typing import Optional
@@ -6,7 +8,41 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich import print as rprint
-from dotenv import load_dotenv
+
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "edutools")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.toml")
+
+_DEFAULT_CONFIG = """\
+# Edutools Configuration
+# Fill in the values below for each service you want to use.
+# Run 'edutools check' to verify your credentials after editing.
+
+[canvas]
+# API access token (required for Canvas commands)
+# Generate at: Canvas -> Account -> Settings -> Approved Integrations -> + New Access Token
+token = ""
+# Canvas instance URL (optional, defaults to https://boisestatecanvas.instructure.com)
+# endpoint = "https://boisestatecanvas.instructure.com"
+
+[google]
+# Path to Google OAuth client_secret.json (optional)
+# Default location: ~/.config/edutools/client_secret.json
+#
+# Setup steps:
+#   1. Create a project at https://console.cloud.google.com
+#   2. Enable the Google Docs, Drive, and Gmail APIs
+#   3. Create OAuth 2.0 credentials (Desktop application)
+#   4. Download the client secrets JSON and save to ~/.config/edutools/client_secret.json
+# oauth_path = ""
+
+[aws]
+# AWS credentials for IAM user management
+# Get these from AWS IAM console -> Security Credentials
+access_key_id = ""
+secret_access_key = ""
+# AWS region (optional, defaults to us-west-2)
+# region = "us-west-2"
+"""
 
 app = typer.Typer(
     name="edutools",
@@ -18,18 +54,225 @@ app = typer.Typer(
 console = Console()
 
 # Sub-apps for organization
-canvas_app = typer.Typer(help="📚 Canvas LMS operations")
-iam_app = typer.Typer(help="☁️  AWS IAM user management")
-google_app = typer.Typer(help="📄 Google Docs operations")
+canvas_app = typer.Typer(help="📚 Canvas LMS operations", no_args_is_help=True)
+iam_app = typer.Typer(help="☁️  AWS IAM user management", no_args_is_help=True)
+google_app = typer.Typer(help="📄 Google Docs operations", no_args_is_help=True)
 
 app.add_typer(canvas_app, name="canvas")
 app.add_typer(iam_app, name="iam")
 app.add_typer(google_app, name="google")
 
 
+def _check_config() -> tuple[bool, bool, bool]:
+    """Check which services are configured. Returns (canvas, google, aws)."""
+    has_canvas = bool(os.getenv("CANVAS_TOKEN"))
+    has_google = os.path.exists(os.path.join(CONFIG_DIR, "client_secret.json"))
+    has_aws = bool(os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
+    if not has_aws:
+        has_aws = os.path.exists(os.path.join(os.path.expanduser("~"), ".aws", "credentials"))
+    return has_canvas, has_google, has_aws
+
+
+def _show_setup_status(has_canvas: bool, has_google: bool, has_aws: bool) -> None:
+    """Display which services are configured and setup instructions for missing ones."""
+    lines: list[str] = []
+
+    lines.append(f"Config file: [cyan]{CONFIG_FILE}[/cyan]\n")
+
+    # --- Canvas ---
+    if has_canvas:
+        lines.append("[green]✓[/green] [bold magenta]Canvas LMS[/bold magenta] - configured")
+    else:
+        lines.append("[red]✗[/red] [bold magenta]Canvas LMS[/bold magenta] - not configured")
+        lines.append(f"  Edit [cyan]{CONFIG_FILE}[/cyan] [canvas] section:")
+        lines.append("  [yellow]token[/yellow]    - API access token (required)")
+        lines.append("              Generate at: Canvas -> Account -> Settings")
+        lines.append("              -> Approved Integrations -> + New Access Token")
+        lines.append("  [yellow]endpoint[/yellow] - Canvas URL (optional)")
+        lines.append("              Defaults to https://boisestatecanvas.instructure.com")
+
+    lines.append("")
+
+    # --- Google ---
+    if has_google:
+        lines.append("[green]✓[/green] [bold magenta]Google Docs / Gmail[/bold magenta] - configured")
+    else:
+        lines.append("[red]✗[/red] [bold magenta]Google Docs / Gmail[/bold magenta] - not configured")
+        lines.append("  1. Create a project at https://console.cloud.google.com")
+        lines.append("  2. Enable the Google Docs, Drive, and Gmail APIs")
+        lines.append("  3. Create OAuth 2.0 credentials (Desktop application)")
+        lines.append("  4. Download the client secrets JSON and save as:")
+        lines.append(f"     [cyan]{os.path.join(CONFIG_DIR, 'client_secret.json')}[/cyan]")
+        lines.append(f"  Or set [yellow]oauth_path[/yellow] in [cyan]{CONFIG_FILE}[/cyan] [google] section")
+
+    lines.append("")
+
+    # --- AWS ---
+    if has_aws:
+        lines.append("[green]✓[/green] [bold magenta]AWS IAM[/bold magenta] - configured")
+    else:
+        lines.append("[red]✗[/red] [bold magenta]AWS IAM[/bold magenta] - not configured")
+        lines.append(f"  Edit [cyan]{CONFIG_FILE}[/cyan] [aws] section:")
+        lines.append("  [yellow]access_key_id[/yellow]     - Your AWS access key")
+        lines.append("  [yellow]secret_access_key[/yellow] - Your AWS secret key")
+
+    lines.append("")
+    lines.append("[dim]Run 'edutools check' to verify credentials work.[/dim]")
+
+    console.print(Panel.fit(
+        "\n".join(lines),
+        title="Setup Status",
+        border_style="yellow",
+    ))
+
+
+def _load_config() -> dict[str, dict[str, str]]:
+    """Read config.toml and set environment variables for all services.
+
+    Config file values take precedence over existing environment variables.
+    """
+    if not os.path.exists(CONFIG_FILE):
+        return {}
+
+    with open(CONFIG_FILE, "rb") as f:
+        config = tomllib.load(f)
+
+    # Canvas
+    canvas = config.get("canvas", {})
+    if canvas.get("token"):
+        os.environ["CANVAS_TOKEN"] = canvas["token"]
+    if canvas.get("endpoint"):
+        os.environ["CANVAS_ENDPOINT"] = canvas["endpoint"]
+
+    # AWS
+    aws = config.get("aws", {})
+    if aws.get("access_key_id"):
+        os.environ["AWS_ACCESS_KEY_ID"] = aws["access_key_id"]
+    if aws.get("secret_access_key"):
+        os.environ["AWS_SECRET_ACCESS_KEY"] = aws["secret_access_key"]
+    if aws.get("region"):
+        os.environ["AWS_DEFAULT_REGION"] = aws["region"]
+
+    # Google
+    google = config.get("google", {})
+    if google.get("oauth_path"):
+        os.environ["GOOGLE_OAUTH_PATH"] = google["oauth_path"]
+
+    return config
+
+
 def init():
-    """Initialize environment variables."""
-    load_dotenv()
+    """Initialize environment and ensure config directory exists."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+
+    # Create default config file with placeholders on first run
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write(_DEFAULT_CONFIG)
+
+    _load_config()
+    has_canvas, has_google, has_aws = _check_config()
+    if not has_canvas or not has_google or not has_aws:
+        _show_setup_status(has_canvas, has_google, has_aws)
+
+
+# ============================================================================
+# Check Command
+# ============================================================================
+
+@app.command("check")
+def check_credentials():
+    """🔍 Test all configured service credentials."""
+    init()
+
+    passed = 0
+    failed = 0
+    skipped = 0
+    results: list[str] = []
+
+    def _ok(service: str, detail: str) -> None:
+        nonlocal passed
+        passed += 1
+        results.append(f"  [green]✓[/green] [bold]{service}[/bold] — {detail}")
+
+    def _fail(service: str, detail: str, error: str) -> None:
+        nonlocal failed
+        failed += 1
+        results.append(f"  [red]✗[/red] [bold]{service}[/bold] — {detail}")
+        results.append(f"    [red]Error:[/red] {error}")
+
+    def _skip(service: str, detail: str) -> None:
+        nonlocal skipped
+        skipped += 1
+        results.append(f"  [yellow]⊘[/yellow] [bold]{service}[/bold] — {detail}")
+
+    # --- Canvas ---
+    canvas_endpoint = os.getenv("CANVAS_ENDPOINT", "https://boisestatecanvas.instructure.com")
+    canvas_token = os.getenv("CANVAS_TOKEN")
+    if not canvas_token:
+        _skip("Canvas LMS", "token not set in config.toml [canvas] section")
+    else:
+        try:
+            from edutools.canvas import CanvasLMS
+            with console.status("[bold green]Testing Canvas...", spinner="dots"):
+                canvas = CanvasLMS()
+                courses = canvas.get_courses()
+            _ok("Canvas LMS", f"{canvas_endpoint} ({len(courses)} courses)")
+        except (Exception, SystemExit) as e:
+            _fail("Canvas LMS", canvas_endpoint, str(e))
+
+    # --- Google Docs / Drive ---
+    try:
+        from edutools.google_helpers import _get_oauth_path
+        _get_oauth_path()
+        oauth_found = True
+    except (Exception, SystemExit):
+        oauth_found = False
+
+    if not oauth_found:
+        _skip("Google Docs", "client_secret.json not found in ~/.config/edutools/")
+        _skip("Gmail", "Requires Google OAuth (see Google Docs above)")
+    else:
+        try:
+            from edutools.google_helpers import _get_credentials
+            with console.status("[bold green]Testing Google Docs...", spinner="dots"):
+                _get_credentials()
+            _ok("Google Docs", "OAuth token valid")
+        except (Exception, SystemExit) as e:
+            _fail("Google Docs", "OAuth authentication failed", str(e))
+
+        try:
+            from edutools.google_helpers import _get_gmail_credentials
+            with console.status("[bold green]Testing Gmail...", spinner="dots"):
+                _get_gmail_credentials()
+            _ok("Gmail", "OAuth token valid")
+        except (Exception, SystemExit) as e:
+            _fail("Gmail", "OAuth authentication failed", str(e))
+
+    # --- AWS IAM ---
+    try:
+        import boto3
+        with console.status("[bold green]Testing AWS...", spinner="dots"):
+            sts = boto3.client("sts")
+            identity = sts.get_caller_identity()
+        account_id = identity["Account"]
+        arn = identity["Arn"]
+        _ok("AWS IAM", f"Account {account_id} ({arn})")
+    except ImportError:
+        _skip("AWS IAM", "boto3 not installed")
+    except (Exception, SystemExit) as e:
+        _fail("AWS IAM", "STS GetCallerIdentity failed", str(e))
+
+    # --- Summary ---
+    console.print()
+    console.print(Panel.fit(
+        "\n".join(results) + "\n\n"
+        f"[green]✓ Passed: {passed}[/green]  "
+        f"[red]✗ Failed: {failed}[/red]  "
+        f"[yellow]⊘ Skipped: {skipped}[/yellow]",
+        title="Credential Check",
+        border_style="green" if failed == 0 else "red",
+    ))
 
 
 # ============================================================================
@@ -61,7 +304,7 @@ def list_courses():
     console.print(f"\n[dim]Total: {len(courses)} courses[/dim]")
 
 
-@canvas_app.command("assignments")
+@canvas_app.command("assignments", no_args_is_help=True)
 def list_assignments(course_id: str = typer.Argument(..., help="Canvas course ID")):
     """📝 List all assignments for a course."""
     init()
@@ -86,7 +329,7 @@ def list_assignments(course_id: str = typer.Argument(..., help="Canvas course ID
     console.print(f"\n[dim]Total: {len(assignments)} assignments[/dim]")
 
 
-@canvas_app.command("students")
+@canvas_app.command("students", no_args_is_help=True)
 def list_students(course_id: str = typer.Argument(..., help="Canvas course ID")):
     """👥 List all students in a course."""
     init()
@@ -111,7 +354,7 @@ def list_students(course_id: str = typer.Argument(..., help="Canvas course ID"))
     console.print(f"\n[dim]Total: {len(students)} students[/dim]")
 
 
-@canvas_app.command("submissions")
+@canvas_app.command("submissions", no_args_is_help=True)
 def list_submissions(
     course_id: str = typer.Argument(..., help="Canvas course ID"),
     assignment_id: str = typer.Argument(..., help="Assignment ID"),
@@ -222,7 +465,7 @@ def provision_users(course_id: Optional[str] = typer.Argument(None, help="Canvas
         console.print(f"\n[green]Results written to [bold]{filename}[/bold][/green]")
 
 
-@iam_app.command("email-credentials")
+@iam_app.command("email-credentials", no_args_is_help=True)
 def email_credentials(
     csv_file: str = typer.Argument(..., help="CSV file generated by 'iam provision'"),
     sender_name: str = typer.Option("Course Instructor", "--sender", "-s", help="Name to use in email signature"),
@@ -380,7 +623,7 @@ def deprovision_users(
     _display_iam_results(results, "deleted", "🗑️ Deprovisioning Results")
 
 
-@iam_app.command("reset-passwords")
+@iam_app.command("reset-passwords", no_args_is_help=True)
 def reset_passwords(course_id: str = typer.Argument(..., help="Canvas course ID")):
     """🔑 Reset passwords for all student IAM users."""
     init()
@@ -405,7 +648,7 @@ def reset_passwords(course_id: str = typer.Argument(..., help="Canvas course ID"
     _display_iam_results(results, "reset", "🔑 Password Reset Results", show_password=True)
 
 
-@iam_app.command("reset-password")
+@iam_app.command("reset-password", no_args_is_help=True)
 def reset_password(username: str = typer.Argument(..., help="IAM username to reset")):
     """🔑 Reset password for a single student IAM user."""
     init()
@@ -428,7 +671,7 @@ def reset_password(username: str = typer.Argument(..., help="IAM username to res
         raise typer.Exit(1)
 
 
-@iam_app.command("update-policy")
+@iam_app.command("update-policy", no_args_is_help=True)
 def update_policy(course_id: str = typer.Argument(..., help="Canvas course ID")):
     """📜 Update EC2 policy for all student IAM users."""
     init()
@@ -508,7 +751,7 @@ def _display_iam_results(results: list, success_status: str, title: str, show_pa
 # Google Commands
 # ============================================================================
 
-@google_app.command("create-doc")
+@google_app.command("create-doc", no_args_is_help=True)
 def create_doc(
     title: str = typer.Argument(..., help="Document title"),
     folder_id: Optional[str] = typer.Argument(None, help="Optional Google Drive folder ID"),
@@ -542,6 +785,7 @@ def main(ctx: typer.Context):
 
     [dim]Use --help with any command for more information.[/dim]
     """
+    init()
     if ctx.invoked_subcommand is None:
         console.print(Panel.fit(
             "[bold green]🎓 Edu Tools CLI[/bold green]\n\n"
@@ -549,6 +793,7 @@ def main(ctx: typer.Context):
             "  [cyan]canvas[/cyan]   - Canvas LMS operations (courses, students, assignments)\n"
             "  [cyan]iam[/cyan]      - AWS IAM user management (provision, deprovision, reset)\n"
             "  [cyan]google[/cyan]   - Google Docs operations\n\n"
+            "  [cyan]check[/cyan]    - Test all configured service credentials\n\n"
             "[dim]Run 'edutools <command> --help' for more information.[/dim]",
             title="Welcome",
             border_style="green",

@@ -8,7 +8,7 @@
             "name": "Python Debugger: Module",
             "type": "debugpy",
             "request": "launch",
-            "module": "edu_tools.cli",
+            "module": "edutools.cli",
             "console": "integratedTerminal",
             "args": "${command:pickArgs}"
 

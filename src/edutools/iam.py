@@ -9,7 +9,6 @@ from typing import Callable, Optional
 
 import boto3
 from botocore.exceptions import ClientError
-from dotenv import load_dotenv
 
 from edutools.canvas import CanvasLMS
 
@@ -70,7 +69,6 @@ class IAMProvisioner:
     """Provisions AWS IAM users with restricted permissions."""
 
     def __init__(self, region_name: Optional[str] = None):
-        load_dotenv()
         region = region_name or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-west-2"
         session = boto3.session.Session(region_name=region)
         self.client = session.client("iam")

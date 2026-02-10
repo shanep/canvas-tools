@@ -4,7 +4,6 @@ import base64
 import os.path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
 
 from google.auth.transport.requests import Request
@@ -40,7 +39,6 @@ def _config_dir() -> str:
 
 def _get_oauth_path() -> str:
     """Resolve the OAuth client secrets file path."""
-    load_dotenv()
     path = os.getenv("GOOGLE_OAUTH_PATH")
     if path and os.path.exists(path):
         return path
