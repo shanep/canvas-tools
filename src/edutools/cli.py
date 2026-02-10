@@ -280,35 +280,44 @@ def check_credentials():
 # ============================================================================
 
 @canvas_app.command("courses")
-def list_courses():
-    """📋 List all active Canvas courses where you are a teacher."""
+def list_courses(
+    all_courses: bool = typer.Option(False, "--all", "-a", help="Show all courses, including past/completed ones"),
+):
+    """📋 List Canvas courses where you are a teacher."""
     init()
     from edutools.canvas import CanvasLMS
 
-    with console.status("[bold green]Fetching courses from Canvas...", spinner="dots"):
+    label = "all" if all_courses else "active"
+    with console.status(f"[bold green]Fetching {label} courses from Canvas...", spinner="dots"):
         canvas = CanvasLMS()
-        courses = canvas.get_courses()
+        courses = canvas.get_courses(include_all=all_courses)
 
     if not courses:
         console.print("[yellow]No courses found.[/yellow]")
         return
 
-    table = Table(title="📚 Your Canvas Courses", show_header=True, header_style="bold magenta")
+    title = "📚 All Canvas Courses" if all_courses else "📚 Active Canvas Courses"
+    table = Table(title=title, show_header=True, header_style="bold magenta")
     table.add_column("ID", style="cyan", justify="right")
     table.add_column("Course Name", style="green")
 
     for c in courses:
-        table.add_row(str(c["id"]), c["name"])
+        table.add_row(str(c["id"]), str(c["name"]))
 
     console.print(table)
     console.print(f"\n[dim]Total: {len(courses)} courses[/dim]")
 
 
-@canvas_app.command("assignments", no_args_is_help=True)
-def list_assignments(course_id: str = typer.Argument(..., help="Canvas course ID")):
+@canvas_app.command("assignments")
+def list_assignments(
+    course_id: Optional[str] = typer.Argument(None, help="Canvas course ID (prompted if omitted)"),
+):
     """📝 List all assignments for a course."""
     init()
     from edutools.canvas import CanvasLMS
+
+    if course_id is None:
+        course_id = _select_course()
 
     with console.status(f"[bold green]Fetching assignments for course {course_id}...", spinner="dots"):
         canvas = CanvasLMS()
@@ -329,11 +338,16 @@ def list_assignments(course_id: str = typer.Argument(..., help="Canvas course ID
     console.print(f"\n[dim]Total: {len(assignments)} assignments[/dim]")
 
 
-@canvas_app.command("students", no_args_is_help=True)
-def list_students(course_id: str = typer.Argument(..., help="Canvas course ID")):
+@canvas_app.command("students")
+def list_students(
+    course_id: Optional[str] = typer.Argument(None, help="Canvas course ID (prompted if omitted)"),
+):
     """👥 List all students in a course."""
     init()
     from edutools.canvas import CanvasLMS
+
+    if course_id is None:
+        course_id = _select_course()
 
     with console.status(f"[bold green]Fetching students for course {course_id}...", spinner="dots"):
         canvas = CanvasLMS()
@@ -354,14 +368,19 @@ def list_students(course_id: str = typer.Argument(..., help="Canvas course ID"))
     console.print(f"\n[dim]Total: {len(students)} students[/dim]")
 
 
-@canvas_app.command("submissions", no_args_is_help=True)
+@canvas_app.command("submissions")
 def list_submissions(
-    course_id: str = typer.Argument(..., help="Canvas course ID"),
-    assignment_id: str = typer.Argument(..., help="Assignment ID"),
+    course_id: Optional[str] = typer.Argument(None, help="Canvas course ID (prompted if omitted)"),
+    assignment_id: Optional[str] = typer.Argument(None, help="Assignment ID"),
 ):
     """📊 List all submissions for an assignment."""
     init()
     from edutools.canvas import CanvasLMS
+
+    if course_id is None:
+        course_id = _select_course()
+    if assignment_id is None:
+        assignment_id = _select_assignment(course_id)
 
     with console.status(f"[bold green]Fetching submissions...", spinner="dots"):
         canvas = CanvasLMS()
@@ -420,6 +439,31 @@ def _select_course() -> str:
         raise typer.Exit(1)
 
     return str(courses[choice - 1]["id"])
+
+
+def _select_assignment(course_id: str) -> str:
+    """Fetch assignments for a course and prompt the user to select one."""
+    from edutools.canvas import CanvasLMS
+
+    with console.status("[bold green]Fetching assignments from Canvas...", spinner="dots"):
+        canvas = CanvasLMS()
+        assignments = canvas.get_assignments(course_id)
+
+    if not assignments:
+        console.print("[yellow]No assignments found.[/yellow]")
+        raise typer.Exit()
+
+    console.print()
+    for i, a in enumerate(assignments, 1):
+        console.print(f"  [cyan]{i}[/cyan]. {a['name']} [dim](ID: {a['id']})[/dim]")
+    console.print()
+
+    choice = typer.prompt("Select an assignment", type=int)
+    if choice < 1 or choice > len(assignments):
+        console.print("[red]Invalid selection.[/red]")
+        raise typer.Exit(1)
+
+    return str(assignments[choice - 1]["id"])
 
 
 @iam_app.command("provision")

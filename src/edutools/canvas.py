@@ -20,13 +20,20 @@ class CanvasLMS():
         return json.loads(request.text)
 
 
-    def get_courses(self):
-        params = {"state[]": "available", "enrollment_type": "teacher",
-                  "per_page": 40, "include[]": "term"}
+    def get_courses(self, *, include_all: bool = False) -> list[dict[str, object]]:
+        params: dict[str, str | int] = {
+            "enrollment_type": "teacher",
+            "per_page": 40,
+            "include[]": "term",
+        }
+        if not include_all:
+            params["state[]"] = "available"
         url_postfix = "/api/v1/courses"
         courses = self.__execute_get(params, url_postfix)
+        if include_all:
+            return courses
         now = datetime.now(timezone.utc)
-        active = []
+        active: list[dict[str, object]] = []
         for c in courses:
             if c.get("workflow_state") != "available":
                 continue

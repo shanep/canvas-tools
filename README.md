@@ -9,3 +9,7 @@ Small CLI utilities for querying Canvas (courses, assignments, students, submiss
 ```bash
 edutools -h
 ```
+
+## Development
+
+Canvas Live API documentation: https://boisestatecanvas.instructure.com/doc/api/live
