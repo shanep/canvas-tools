@@ -1,7 +1,13 @@
 import os
+import re
 import requests
-import json
 from datetime import datetime, timezone
+
+
+# Pattern to extract the "next" URL from the Link header.
+# Canvas returns: <https://...?page=2&per_page=100>; rel="next", ...
+_LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
+
 
 class CanvasLMS():
     def __init__(self):
@@ -13,23 +19,43 @@ class CanvasLMS():
         self.endpoint = os.getenv("CANVAS_ENDPOINT", "https://boisestatecanvas.instructure.com")
         self.headers = {"Authorization": f"Bearer {token}"}
 
-    def __execute_get(self,param, url=""):
-        request = requests.get(self.endpoint + url, params=param, headers=self.headers)
-        if not request.ok:
-            raise RuntimeError(f"Canvas API error {request.status_code}: {request.text}")
-        return json.loads(request.text)
+    def _get_paginated(self, url_path: str, params: dict[str, str | int]) -> list[dict[str, object]]:
+        """Fetch all pages of a paginated Canvas API endpoint."""
+        url: str | None = self.endpoint + url_path
+        params = {**params, "per_page": 100}
+        all_results: list[dict[str, object]] = []
 
+        while url is not None:
+            response = requests.get(url, params=params, headers=self.headers)
+            if not response.ok:
+                raise RuntimeError(f"Canvas API error {response.status_code}: {response.text}")
+            all_results.extend(response.json())
+
+            # After the first request, params are baked into the next URL.
+            params = {}
+
+            link_header = response.headers.get("Link", "")
+            match = _LINK_NEXT_RE.search(link_header)
+            url = match.group(1) if match else None
+
+        return all_results
+
+    def _get_single(self, url_path: str, params: dict[str, str | int]) -> dict[str, object]:
+        """Fetch a single Canvas API resource (no pagination)."""
+        response = requests.get(self.endpoint + url_path, params=params, headers=self.headers)
+        if not response.ok:
+            raise RuntimeError(f"Canvas API error {response.status_code}: {response.text}")
+        result: dict[str, object] = response.json()
+        return result
 
     def get_courses(self, *, include_all: bool = False) -> list[dict[str, object]]:
         params: dict[str, str | int] = {
             "enrollment_type": "teacher",
-            "per_page": 40,
             "include[]": "term",
         }
         if not include_all:
             params["state[]"] = "available"
-        url_postfix = "/api/v1/courses"
-        courses = self.__execute_get(params, url_postfix)
+        courses = self._get_paginated("/api/v1/courses", params)
         if include_all:
             return courses
         now = datetime.now(timezone.utc)
@@ -37,33 +63,23 @@ class CanvasLMS():
         for c in courses:
             if c.get("workflow_state") != "available":
                 continue
-            term = c.get("term", {})
-            end = term.get("end_at")
+            term = c.get("term")
+            end = term.get("end_at") if isinstance(term, dict) else None
             if end and datetime.fromisoformat(end) < now:
                 continue
             active.append(c)
         return active
 
-    def get_assignments(self,course_id):
-        param = {"per_page": 150}
-        url_postfix = f"/api/v1/courses/{course_id}/assignments"
-        assignments = self.__execute_get(param, url_postfix)
-        return assignments
+    def get_assignments(self, course_id: str) -> list[dict[str, object]]:
+        return self._get_paginated(f"/api/v1/courses/{course_id}/assignments", {})
 
-    def get_students(self, course_id):
-        param = {"per_page": 150, "enrollment_type[]": "student"}
-        url_postfix = f"/api/v1/courses/{course_id}/users"
-        students = self.__execute_get(param, url_postfix)
-        return students
+    def get_students(self, course_id: str) -> list[dict[str, object]]:
+        return self._get_paginated(f"/api/v1/courses/{course_id}/users", {"enrollment_type[]": "student"})
 
-    def get_submissions(self, course_id, assignment_id):
-        param = {"per_page": 150}
-        url_postfix = f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
-        submissions = self.__execute_get(param, url_postfix)
-        return submissions
+    def get_submissions(self, course_id: str, assignment_id: str) -> list[dict[str, object]]:
+        return self._get_paginated(
+            f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions", {}
+        )
 
-    def get_assignment(self, course_id, assignment_id):
-        param = {"per_page": 150}
-        url_postfix = f"/api/v1/courses/{course_id}/assignments/{assignment_id}/"
-        assignment = self.__execute_get(param, url_postfix)
-        return assignment
+    def get_assignment(self, course_id: str, assignment_id: str) -> dict[str, object]:
+        return self._get_single(f"/api/v1/courses/{course_id}/assignments/{assignment_id}/", {})
