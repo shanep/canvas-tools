@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+from datetime import datetime, timezone
 
 class CanvasLMS():
     def __init__(self):
@@ -21,30 +22,42 @@ class CanvasLMS():
 
 
     def get_courses(self):
-        params = {"state[]": "available", "enrollment_type": "teacher", "per_page": 40}
-        courses = self.__execute_get(params)
-        return courses
+        params = {"state[]": "available", "enrollment_type": "teacher",
+                  "per_page": 40, "include[]": "term"}
+        url_postfix = "/api/v1/courses"
+        courses = self.__execute_get(params, url_postfix)
+        now = datetime.now(timezone.utc)
+        active = []
+        for c in courses:
+            if c.get("workflow_state") != "available":
+                continue
+            term = c.get("term", {})
+            end = term.get("end_at")
+            if end and datetime.fromisoformat(end) < now:
+                continue
+            active.append(c)
+        return active
 
     def get_assignments(self,course_id):
         param = {"per_page": 150}
-        url_postfix = f"/{course_id}/assignments"
+        url_postfix = f"/api/v1/courses/{course_id}/assignments"
         assignments = self.__execute_get(param, url_postfix)
         return assignments
 
     def get_students(self, course_id):
         param = {"per_page": 150, "enrollment_type[]": "student"}
-        url_postfix = f"/{course_id}/users"
+        url_postfix = f"/api/v1/courses/{course_id}/users"
         students = self.__execute_get(param, url_postfix)
         return students
 
     def get_submissions(self, course_id, assignment_id):
         param = {"per_page": 150}
-        url_postfix = f"/{course_id}/assignments/{assignment_id}/submissions"
+        url_postfix = f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
         submissions = self.__execute_get(param, url_postfix)
         return submissions
 
     def get_assignment(self, course_id, assignment_id):
         param = {"per_page": 150}
-        url_postfix = f"/{course_id}/assignments/{assignment_id}/"
+        url_postfix = f"/api/v1/courses/{course_id}/assignments/{assignment_id}/"
         assignment = self.__execute_get(param, url_postfix)
         return assignment

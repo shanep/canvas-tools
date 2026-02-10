@@ -31,14 +31,31 @@ ALL_SCOPES = DOCS_SCOPES + GMAIL_SCOPES
 SCOPES = DOCS_SCOPES
 
 
-def _get_credentials() -> Credentials:
+def _config_dir() -> str:
+    """Return the config directory, creating it if needed."""
+    config = os.path.join(os.path.expanduser("~"), ".config", "edutools")
+    os.makedirs(config, exist_ok=True)
+    return config
+
+
+def _get_oauth_path() -> str:
+    """Resolve the OAuth client secrets file path."""
     load_dotenv()
-    GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH")
-    GOOGLE_OAUTH_PATH = os.getenv("GOOGLE_OAUTH_PATH")
-    if not GOOGLE_TOKEN_PATH or not GOOGLE_OAUTH_PATH:
-        raise ValueError(
-            "GOOGLE_TOKEN_PATH and GOOGLE_OAUTH_PATH must be set in environment variables."
-        )
+    path = os.getenv("GOOGLE_OAUTH_PATH")
+    if path and os.path.exists(path):
+        return path
+    default = os.path.join(_config_dir(), "client_secret.json")
+    if os.path.exists(default):
+        return default
+    raise ValueError(
+        "Google OAuth client secrets not found. Either set GOOGLE_OAUTH_PATH "
+        "or place client_secret.json in ~/.config/edutools/"
+    )
+
+
+def _get_credentials() -> Credentials:
+    GOOGLE_TOKEN_PATH = os.path.join(_config_dir(), "google_token.json")
+    GOOGLE_OAUTH_PATH = _get_oauth_path()
 
     creds: Optional[Credentials] = None
     if os.path.exists(GOOGLE_TOKEN_PATH):
@@ -141,16 +158,10 @@ def replace_all_text(
 
 def _get_gmail_credentials() -> Credentials:
     """Get credentials with Gmail scope."""
-    load_dotenv()
-    GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH")
-    GOOGLE_OAUTH_PATH = os.getenv("GOOGLE_OAUTH_PATH")
-    if not GOOGLE_TOKEN_PATH or not GOOGLE_OAUTH_PATH:
-        raise ValueError(
-            "GOOGLE_TOKEN_PATH and GOOGLE_OAUTH_PATH must be set in environment variables."
-        )
+    GOOGLE_OAUTH_PATH = _get_oauth_path()
 
     # Use a separate token file for Gmail to avoid scope conflicts
-    gmail_token_path = GOOGLE_TOKEN_PATH.replace(".json", "_gmail.json")
+    gmail_token_path = os.path.join(_config_dir(), "google_token_gmail.json")
 
     creds: Optional[Credentials] = None
     if os.path.exists(gmail_token_path):
