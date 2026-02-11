@@ -151,6 +151,235 @@ def replace_all_text(
 
 
 # ============================================================================
+# Drive Functions
+# ============================================================================
+
+
+def create_folder(name: str, parent_id: Optional[str] = None) -> str:
+    """Create a Google Drive folder.
+
+    Args:
+        name: Folder name.
+        parent_id: Optional parent folder ID.  If omitted the folder is
+            created in the caller's Drive root.
+
+    Returns:
+        The folder ID.
+    """
+    drive = _drive_service()
+    metadata: Dict[str, Any] = {
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+    }
+    if parent_id:
+        metadata["parents"] = [parent_id]
+    folder: Dict[str, Any] = drive.files().create(body=metadata, fields="id").execute()
+    folder_id: str = folder["id"]
+    return folder_id
+
+
+def create_doc_with_content(
+    title: str, content: str, folder_id: Optional[str] = None,
+) -> str:
+    """Create a Google Doc pre-populated with text content.
+
+    Uses Drive file upload with conversion so the document is immediately
+    ready when opened — avoids the propagation delay caused by creating an
+    empty doc then inserting text via a separate ``batchUpdate`` call.
+
+    Args:
+        title: Document title.
+        content: Plain-text content for the document body.
+        folder_id: Optional Google Drive folder ID to place the document in.
+
+    Returns:
+        The document ID.
+    """
+    from googleapiclient.http import MediaInMemoryUpload
+
+    drive = _drive_service()
+    media = MediaInMemoryUpload(
+        content.encode("utf-8"),
+        mimetype="text/plain",
+        resumable=False,
+    )
+    metadata: Dict[str, Any] = {
+        "name": title,
+        "mimeType": "application/vnd.google-apps.document",
+    }
+    if folder_id:
+        metadata["parents"] = [folder_id]
+    result: Dict[str, Any] = drive.files().create(
+        body=metadata, media_body=media, fields="id",
+    ).execute()
+    doc_id: str = result["id"]
+    return doc_id
+
+
+def upload_text_file(name: str, content: str, folder_id: str) -> str:
+    """Upload a plain-text file to Google Drive.
+
+    The file is stored as a binary blob (not converted to a Google Doc)
+    so students can download the original content.
+
+    Args:
+        name: Filename (e.g. ``jdoe-sshkey``).
+        content: File content as a string.
+        folder_id: Google Drive folder ID to upload into.
+
+    Returns:
+        The file ID.
+    """
+    from googleapiclient.http import MediaInMemoryUpload
+
+    drive = _drive_service()
+    media = MediaInMemoryUpload(
+        content.encode("utf-8"),
+        mimetype="text/plain",
+        resumable=False,
+    )
+    metadata: Dict[str, Any] = {
+        "name": name,
+        "parents": [folder_id],
+    }
+    result: Dict[str, Any] = drive.files().create(
+        body=metadata, media_body=media, fields="id",
+    ).execute()
+    file_id: str = result["id"]
+    return file_id
+
+
+def share_with_user(file_id: str, email: str, role: str = "reader") -> str:
+    """Share a Drive file or folder with a user.
+
+    Creates a permission on *file_id* granting *role* to *email*.
+    Google sends a default notification email to the recipient.
+
+    Args:
+        file_id: Google Drive file or folder ID.
+        email: Email address of the user to share with.
+        role: Permission role (``reader``, ``writer``, ``commenter``).
+
+    Returns:
+        The permission ID.
+    """
+    drive = _drive_service()
+    permission: Dict[str, str] = {
+        "type": "user",
+        "role": role,
+        "emailAddress": email,
+    }
+    result: Dict[str, Any] = drive.permissions().create(
+        fileId=file_id,
+        body=permission,
+        fields="id",
+        sendNotificationEmail=True,
+    ).execute()
+    perm_id: str = result["id"]
+    return perm_id
+
+
+def find_files_by_name(name: str, mime_type: Optional[str] = None) -> list[Dict[str, str]]:
+    """Find Drive files whose name exactly matches *name*.
+
+    Args:
+        name: Exact file/folder name to search for.
+        mime_type: Optional MIME type filter (e.g.
+            ``application/vnd.google-apps.folder`` to match only folders).
+
+    Returns:
+        List of dicts with keys: id, name.
+    """
+    drive = _drive_service()
+    q = f"name = '{name}' and trashed = false"
+    if mime_type:
+        q += f" and mimeType = '{mime_type}'"
+    resp: Dict[str, Any] = drive.files().list(q=q, fields="files(id, name)").execute()
+    files: list[Dict[str, str]] = [
+        {"id": f["id"], "name": f["name"]}
+        for f in resp.get("files", [])
+    ]
+    return files
+
+
+def find_files_by_prefix(
+    prefix: str, mime_type: Optional[str] = None,
+) -> list[Dict[str, str]]:
+    """Find Drive files whose name starts with *prefix*.
+
+    Uses the ``name contains`` query operator and then filters client-side
+    to ensure the match is a true prefix.
+
+    Args:
+        prefix: Name prefix to search for.
+        mime_type: Optional MIME type filter.
+
+    Returns:
+        List of dicts with keys: id, name.
+    """
+    drive = _drive_service()
+    q = f"name contains '{prefix}' and trashed = false"
+    if mime_type:
+        q += f" and mimeType = '{mime_type}'"
+    resp: Dict[str, Any] = drive.files().list(q=q, fields="files(id, name)").execute()
+    files: list[Dict[str, str]] = [
+        {"id": f["id"], "name": f["name"]}
+        for f in resp.get("files", [])
+        if f["name"].startswith(prefix)
+    ]
+    return files
+
+
+def delete_file(file_id: str) -> None:
+    """Delete a file or folder from Google Drive.
+
+    When a folder is deleted its contents are also removed.
+
+    Args:
+        file_id: Google Drive file or folder ID to delete.
+    """
+    drive = _drive_service()
+    drive.files().delete(fileId=file_id).execute()
+
+
+def list_folder_contents(folder_id: str) -> list[Dict[str, str]]:
+    """List all files and folders inside a Drive folder.
+
+    Args:
+        folder_id: Google Drive folder ID.
+
+    Returns:
+        List of dicts with keys: id, name, mimeType.
+    """
+    drive = _drive_service()
+    q = f"'{folder_id}' in parents and trashed = false"
+    resp: Dict[str, Any] = drive.files().list(
+        q=q, fields="files(id, name, mimeType)",
+    ).execute()
+    files: list[Dict[str, str]] = [
+        {"id": f["id"], "name": f["name"], "mimeType": f["mimeType"]}
+        for f in resp.get("files", [])
+    ]
+    return files
+
+
+def download_text_file(file_id: str) -> str:
+    """Download the content of a plain-text file from Google Drive.
+
+    Args:
+        file_id: Google Drive file ID.
+
+    Returns:
+        File content as a string.
+    """
+    drive = _drive_service()
+    # get_media returns the raw file bytes for non-Google-Docs files.
+    # The drive.file scope is sufficient because the app created these files.
+    content: bytes = drive.files().get_media(fileId=file_id).execute()
+    return content.decode("utf-8")
+
+
+# ============================================================================
 # Gmail Functions
 # ============================================================================
 

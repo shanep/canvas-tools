@@ -70,6 +70,10 @@ class CanvasLMS():
             active.append(c)
         return active
 
+    def get_course(self, course_id: str) -> dict[str, object]:
+        """Fetch a single course by ID."""
+        return self._get_single(f"/api/v1/courses/{course_id}", {})
+
     def get_assignments(self, course_id: str) -> list[dict[str, object]]:
         return self._get_paginated(f"/api/v1/courses/{course_id}/assignments", {})
 

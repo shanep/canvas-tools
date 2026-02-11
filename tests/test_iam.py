@@ -4,7 +4,7 @@ import string
 import pytest
 from unittest.mock import patch, MagicMock
 from botocore.exceptions import ClientError
-from edutools.iam import IAMProvisioner, provision_students, deprovision_students, EC2_POLICY
+from edutools.iam import IAMProvisioner, provision_students, deprovision_students, EC2_POLICY, EC2_POLICY_NAME
 
 
 class TestIAMProvisionerPasswordGeneration:
@@ -122,38 +122,146 @@ class TestIAMProvisionerCreateUser:
 class TestIAMProvisionerAttachPolicy:
     """Test EC2 policy attachment"""
 
+    @patch("edutools.iam.boto3.client")
     @patch("edutools.iam.boto3.session.Session")
-    def test_attach_ec2_policy_success(self, mock_session):
-        """Test successful policy attachment"""
+    def test_attach_ec2_policy_success(self, mock_session, mock_boto_client):
+        """Test successful managed policy attachment"""
         mock_client = MagicMock()
         mock_session.return_value.client.return_value = mock_client
+
+        # Mock STS for account ID lookup
+        mock_sts = MagicMock()
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        mock_boto_client.return_value = mock_sts
+
+        # ensure_ec2_policy: policy already exists with room for new version
+        mock_client.get_policy.return_value = {}
+        mock_client.list_policy_versions.return_value = {
+            "Versions": [{"VersionId": "v1", "IsDefaultVersion": True, "CreateDate": "2024-01-01"}]
+        }
 
         provisioner = IAMProvisioner()
         result = provisioner.attach_ec2_policy("testuser")
 
         assert result is True
-        mock_client.put_user_policy.assert_called_once()
-        call_args = mock_client.put_user_policy.call_args
-        assert call_args[1]["UserName"] == "testuser"
-        assert call_args[1]["PolicyName"] == "EC2OnlyAccess"
+        expected_arn = f"arn:aws:iam::123456789012:policy/{EC2_POLICY_NAME}"
+        mock_client.attach_user_policy.assert_called_once_with(
+            UserName="testuser", PolicyArn=expected_arn
+        )
+        # Legacy inline cleanup attempted
+        mock_client.delete_user_policy.assert_called_once_with(
+            UserName="testuser", PolicyName=EC2_POLICY_NAME
+        )
 
-        # Verify policy document
-        policy_doc = json.loads(call_args[1]["PolicyDocument"])
-        assert policy_doc == EC2_POLICY
-
+    @patch("edutools.iam.boto3.client")
     @patch("edutools.iam.boto3.session.Session")
-    def test_attach_ec2_policy_failure(self, mock_session):
+    def test_attach_ec2_policy_failure(self, mock_session, mock_boto_client):
         """Test policy attachment failure"""
         mock_client = MagicMock()
         mock_session.return_value.client.return_value = mock_client
 
+        # Mock STS for account ID lookup
+        mock_sts = MagicMock()
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        mock_boto_client.return_value = mock_sts
+
+        # ensure_ec2_policy succeeds, but attach_user_policy fails
+        mock_client.get_policy.return_value = {}
+        mock_client.list_policy_versions.return_value = {
+            "Versions": [{"VersionId": "v1", "IsDefaultVersion": True, "CreateDate": "2024-01-01"}]
+        }
         error_response = {"Error": {"Code": "NoSuchEntity", "Message": "User not found"}}
-        mock_client.put_user_policy.side_effect = ClientError(error_response, "PutUserPolicy")
+        mock_client.attach_user_policy.side_effect = ClientError(error_response, "AttachUserPolicy")
 
         provisioner = IAMProvisioner()
         result = provisioner.attach_ec2_policy("nonexistent")
 
         assert result is False
+
+
+class TestEnsureEC2Policy:
+    """Test ensure_ec2_policy managed policy creation/update"""
+
+    @patch("edutools.iam.boto3.client")
+    @patch("edutools.iam.boto3.session.Session")
+    def test_creates_policy_when_missing(self, mock_session, mock_boto_client):
+        """Test policy is created when it doesn't exist"""
+        mock_client = MagicMock()
+        mock_session.return_value.client.return_value = mock_client
+
+        mock_sts = MagicMock()
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        mock_boto_client.return_value = mock_sts
+
+        error_response = {"Error": {"Code": "NoSuchEntity", "Message": "Policy not found"}}
+        mock_client.get_policy.side_effect = ClientError(error_response, "GetPolicy")
+
+        provisioner = IAMProvisioner()
+        arn = provisioner.ensure_ec2_policy()
+
+        assert arn == f"arn:aws:iam::123456789012:policy/{EC2_POLICY_NAME}"
+        mock_client.create_policy.assert_called_once()
+        call_args = mock_client.create_policy.call_args
+        assert call_args[1]["PolicyName"] == EC2_POLICY_NAME
+        assert json.loads(call_args[1]["PolicyDocument"]) == EC2_POLICY
+
+    @patch("edutools.iam.boto3.client")
+    @patch("edutools.iam.boto3.session.Session")
+    def test_updates_policy_when_exists(self, mock_session, mock_boto_client):
+        """Test new version is created when policy already exists"""
+        mock_client = MagicMock()
+        mock_session.return_value.client.return_value = mock_client
+
+        mock_sts = MagicMock()
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        mock_boto_client.return_value = mock_sts
+
+        mock_client.get_policy.return_value = {}
+        mock_client.list_policy_versions.return_value = {
+            "Versions": [{"VersionId": "v1", "IsDefaultVersion": True, "CreateDate": "2024-01-01"}]
+        }
+
+        provisioner = IAMProvisioner()
+        arn = provisioner.ensure_ec2_policy()
+
+        assert arn == f"arn:aws:iam::123456789012:policy/{EC2_POLICY_NAME}"
+        mock_client.create_policy_version.assert_called_once()
+        call_args = mock_client.create_policy_version.call_args
+        assert call_args[1]["SetAsDefault"] is True
+        # Should not delete any versions (only 1 exists, under the 5 limit)
+        mock_client.delete_policy_version.assert_not_called()
+
+    @patch("edutools.iam.boto3.client")
+    @patch("edutools.iam.boto3.session.Session")
+    def test_prunes_oldest_version_at_limit(self, mock_session, mock_boto_client):
+        """Test oldest non-default version is deleted when at 5-version limit"""
+        mock_client = MagicMock()
+        mock_session.return_value.client.return_value = mock_client
+
+        mock_sts = MagicMock()
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        mock_boto_client.return_value = mock_sts
+
+        mock_client.get_policy.return_value = {}
+        mock_client.list_policy_versions.return_value = {
+            "Versions": [
+                {"VersionId": "v1", "IsDefaultVersion": False, "CreateDate": "2024-01-01"},
+                {"VersionId": "v2", "IsDefaultVersion": False, "CreateDate": "2024-02-01"},
+                {"VersionId": "v3", "IsDefaultVersion": False, "CreateDate": "2024-03-01"},
+                {"VersionId": "v4", "IsDefaultVersion": False, "CreateDate": "2024-04-01"},
+                {"VersionId": "v5", "IsDefaultVersion": True, "CreateDate": "2024-05-01"},
+            ]
+        }
+
+        provisioner = IAMProvisioner()
+        provisioner.ensure_ec2_policy()
+
+        # Oldest non-default version (v1) should be deleted
+        mock_client.delete_policy_version.assert_called_once_with(
+            PolicyArn=f"arn:aws:iam::123456789012:policy/{EC2_POLICY_NAME}",
+            VersionId="v1",
+        )
+        mock_client.create_policy_version.assert_called_once()
 
 
 class TestEC2Policy:
@@ -187,7 +295,7 @@ class TestEC2Policy:
         """Test policy is restricted to us-west-2 region"""
         for statement in EC2_POLICY["Statement"]:
             assert "Condition" in statement
-            assert statement["Condition"]["StringEquals"]["ec2:Region"] == "us-west-2"
+            assert statement["Condition"]["StringEquals"]["aws:RequestedRegion"] == "us-west-2"
 
     def test_policy_effect_is_allow(self):
         """Test policy effect is Allow for all statements"""
@@ -351,6 +459,7 @@ class TestIAMProvisionerDeleteUser:
         mock_session.return_value.client.return_value = mock_client
         mock_client.list_user_policies.return_value = {"PolicyNames": ["EC2OnlyAccess"]}
         mock_client.list_attached_user_policies.return_value = {"AttachedPolicies": []}
+        mock_client.list_access_keys.return_value = {"AccessKeyMetadata": []}
 
         provisioner = IAMProvisioner()
         result = provisioner.delete_user("testuser")
@@ -365,6 +474,7 @@ class TestIAMProvisionerDeleteUser:
         mock_client.delete_user_policy.assert_called_once_with(
             UserName="testuser", PolicyName="EC2OnlyAccess"
         )
+        mock_client.list_access_keys.assert_called_once_with(UserName="testuser")
         mock_client.delete_user.assert_called_once_with(UserName="testuser")
 
     @patch("edutools.iam.boto3.session.Session")
@@ -421,6 +531,32 @@ class TestIAMProvisionerDeleteUser:
         mock_client.detach_user_policy.assert_called_once_with(
             UserName="testuser",
             PolicyArn="arn:aws:iam::aws:policy/ReadOnlyAccess"
+        )
+
+    @patch("edutools.iam.boto3.session.Session")
+    def test_delete_user_with_access_keys(self, mock_session):
+        """Test deletion removes access keys"""
+        mock_client = MagicMock()
+        mock_session.return_value.client.return_value = mock_client
+        mock_client.list_user_policies.return_value = {"PolicyNames": []}
+        mock_client.list_attached_user_policies.return_value = {"AttachedPolicies": []}
+        mock_client.list_access_keys.return_value = {
+            "AccessKeyMetadata": [
+                {"AccessKeyId": "AKIAIOSFODNN7EXAMPLE"},
+                {"AccessKeyId": "AKIAI44QH8DHBEXAMPLE"},
+            ]
+        }
+
+        provisioner = IAMProvisioner()
+        result = provisioner.delete_user("testuser")
+
+        assert result["status"] == "deleted"
+        assert mock_client.delete_access_key.call_count == 2
+        mock_client.delete_access_key.assert_any_call(
+            UserName="testuser", AccessKeyId="AKIAIOSFODNN7EXAMPLE"
+        )
+        mock_client.delete_access_key.assert_any_call(
+            UserName="testuser", AccessKeyId="AKIAI44QH8DHBEXAMPLE"
         )
 
     @patch("edutools.iam.boto3.session.Session")

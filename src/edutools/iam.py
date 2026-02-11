@@ -17,6 +17,8 @@ def _default_progress(current: int, total: int, message: str) -> None:
     """Default progress callback that prints to stderr."""
     print(f"[{current}/{total}] {message}", file=sys.stderr)
 
+EC2_POLICY_NAME = "EC2OnlyAccess"
+
 # EC2-only policy for student users (restricted to us-west-2)
 EC2_POLICY = {
     "Version": "2012-10-17",
@@ -36,7 +38,7 @@ EC2_POLICY = {
             "Resource": "*",
             "Condition": {
                 "StringEquals": {
-                    "ec2:Region": "us-west-2"
+                    "aws:RequestedRegion": "us-west-2"
                 }
             }
         },
@@ -49,7 +51,9 @@ EC2_POLICY = {
                 "ec2:StopInstances",
                 "ec2:TerminateInstances",
                 "ec2:CreateKeyPair",
+                "ec2:DeleteKeyPair",
                 "ec2:CreateSecurityGroup",
+                "ec2:DeleteSecurityGroup",
                 "ec2:AuthorizeSecurityGroupIngress",
                 "ec2:AuthorizeSecurityGroupEgress",
                 "ec2:CreateTags",
@@ -57,7 +61,7 @@ EC2_POLICY = {
             "Resource": "*",
             "Condition": {
                 "StringEquals": {
-                    "ec2:Region": "us-west-2"
+                    "aws:RequestedRegion": "us-west-2"
                 }
             }
         }
@@ -74,6 +78,56 @@ class IAMProvisioner:
         self.client = session.client("iam")
         self._account_id: Optional[str] = None
         self._sign_in_url: Optional[str] = None
+        self._policy_arn_cached: Optional[str] = None
+
+    def _policy_arn(self) -> str:
+        """Get the ARN for the EC2 managed policy."""
+        if self._policy_arn_cached is None:
+            self._policy_arn_cached = f"arn:aws:iam::{self.get_account_id()}:policy/{EC2_POLICY_NAME}"
+        return self._policy_arn_cached
+
+    def ensure_ec2_policy(self) -> str:
+        """Ensure the EC2 managed policy exists with the current policy document.
+
+        Creates the policy if it doesn't exist, or updates it if it does.
+
+        Returns:
+            The policy ARN.
+        """
+        arn = self._policy_arn()
+        policy_doc = json.dumps(EC2_POLICY)
+
+        try:
+            self.client.get_policy(PolicyArn=arn)
+
+            # Policy exists — create a new version as the default.
+            # AWS enforces a 5-version limit; prune the oldest non-default
+            # version if we're at capacity.
+            versions_resp = self.client.list_policy_versions(PolicyArn=arn)
+            versions = versions_resp["Versions"]
+            non_default = [v for v in versions if not v["IsDefaultVersion"]]
+            if len(versions) >= 5:
+                oldest = min(non_default, key=lambda v: v["CreateDate"])
+                self.client.delete_policy_version(
+                    PolicyArn=arn, VersionId=oldest["VersionId"]
+                )
+
+            self.client.create_policy_version(
+                PolicyArn=arn,
+                PolicyDocument=policy_doc,
+                SetAsDefault=True,
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchEntity":
+                self.client.create_policy(
+                    PolicyName=EC2_POLICY_NAME,
+                    PolicyDocument=policy_doc,
+                    Description="EC2-only access restricted to us-west-2",
+                )
+            else:
+                raise
+
+        return arn
 
     def get_account_id(self) -> str:
         """Get the AWS account ID."""
@@ -176,7 +230,9 @@ class IAMProvisioner:
         return result
 
     def attach_ec2_policy(self, username: str) -> bool:
-        """Attach the EC2-only inline policy to a user.
+        """Attach the EC2 managed policy to a user.
+
+        Also removes the legacy inline policy if present.
 
         Args:
             username: The IAM username to attach the policy to
@@ -185,11 +241,18 @@ class IAMProvisioner:
             True if successful, False otherwise
         """
         try:
-            self.client.put_user_policy(
+            arn = self.ensure_ec2_policy()
+            self.client.attach_user_policy(
                 UserName=username,
-                PolicyName="EC2OnlyAccess",
-                PolicyDocument=json.dumps(EC2_POLICY),
+                PolicyArn=arn,
             )
+            # Remove legacy inline policy if present
+            try:
+                self.client.delete_user_policy(
+                    UserName=username, PolicyName=EC2_POLICY_NAME
+                )
+            except ClientError:
+                pass
             return True
         except ClientError:
             return False
@@ -278,6 +341,17 @@ class IAMProvisioner:
                     )
             except ClientError:
                 pass  # Continue even if detach fails
+
+            # Delete access keys
+            try:
+                keys = self.client.list_access_keys(UserName=username)
+                for key_meta in keys.get("AccessKeyMetadata", []):
+                    self.client.delete_access_key(
+                        UserName=username,
+                        AccessKeyId=key_meta["AccessKeyId"],
+                    )
+            except ClientError:
+                pass  # Continue even if access key deletion fails
 
             # Delete the user
             self.client.delete_user(UserName=username)
@@ -439,6 +513,13 @@ def update_student_policies(
     iam = IAMProvisioner()
 
     if progress_callback:
+        progress_callback(0, 0, "Updating managed policy document...")
+
+    # Update the managed policy once — this takes effect for all users
+    # who already have it attached.
+    iam.ensure_ec2_policy()
+
+    if progress_callback:
         progress_callback(0, 0, "Fetching students from Canvas...")
 
     students = canvas.get_students(course_id)
@@ -446,7 +527,7 @@ def update_student_policies(
     results = []
 
     if progress_callback:
-        progress_callback(0, total, f"Found {total} students. Starting policy update...")
+        progress_callback(0, total, f"Found {total} students. Ensuring policy attachment...")
 
     for i, student in enumerate(students, 1):
         email = student.get("email", "")
@@ -465,9 +546,9 @@ def update_student_policies(
         username = email.split("@")[0]
 
         if progress_callback:
-            progress_callback(i, total, f"Updating policy: {username}")
+            progress_callback(i, total, f"Attaching policy: {username}")
 
-        # Update the policy (put_user_policy replaces existing policy)
+        # Ensure managed policy is attached (also migrates from inline)
         success = iam.attach_ec2_policy(username)
 
         results.append({
