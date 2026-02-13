@@ -695,24 +695,22 @@ _SSH_SCRIPT_TEMPLATE = """\
 
 HOST="{public_ip}"
 USER="ubuntu"
-TMP_KEY="/tmp/edutools-ssh-$$"
-
+SSH_DIR="$HOME/.ssh/"
+AWS_KEY='aws-{username}.pem'
 PRIVATE_KEY='{private_key}'
 
-# Clean up stale key files from previous runs
-for stale in /tmp/edutools-ssh-*; do
-    [ -f "$stale" ] && rm -f "$stale"
-done
+mkdir -p "$SSH_DIR"
+echo "Writing SSH key to $SSH_DIR$AWS_KEY..."
+printf '%s\\n' "$PRIVATE_KEY" > "$SSH_DIR$AWS_KEY"
+chmod 600 "$SSH_DIR$AWS_KEY"
 
-# Write key to temp file
-printf '%s\\n' "$PRIVATE_KEY" > "$TMP_KEY"
-chmod 600 "$TMP_KEY"
-
-# Remove temp file on exit
-trap 'rm -f "$TMP_KEY"' EXIT INT TERM
-
-# Connect
-ssh -o StrictHostKeyChecking=no -i "$TMP_KEY" "$USER@$HOST"
+echo "Here are your connection details:"
+echo "Host: $HOST"
+echo "Username: $USER"
+echo "Public IP: $HOST"
+echo "Instance ID: {instance_id}"
+echo "SSH Command: ssh -i $SSH_DIR$AWS_KEY $USER@$HOST"
+echo "DO NOT COMMIT THIS FILE TO ANY PUBLIC REPOSITORY."
 """
 
 
@@ -764,7 +762,7 @@ def build_connection_doc(*, username: str, public_ip: str, instance_id: str) -> 
         f"\n"
         f"   bash {SSH_SCRIPT_FILENAME}\n"
         f"\n"
-        f"4. You can now install your app and access it. Your webpage will be available at http://{public_ip}/\n"
+        f"4. You can now deploy your app to your VM.\n"
         f"\n"
         f"Troubleshooting\n"
         f"---------------\n"
