@@ -1618,13 +1618,12 @@ def ec2_email_credentials(
 def _run_all_check(
     *,
     launch_template: Optional[str],
-    sender_name: str,
     test_email: str,
 ) -> None:
     """Run the full workflow in check mode with a real VM.
 
-    Mirrors the real launch → share → email pipeline using a single
-    test student and a real EC2 instance.
+    Mirrors the real launch → share pipeline using a single test student
+    and a real EC2 instance.
     """
     import json
     from edutools.aws import (
@@ -1635,7 +1634,6 @@ def _run_all_check(
         check_ec2_launch,
     )
     import edutools.google_helpers as google_helpers
-    from edutools.google_helpers import send_email
 
     if launch_template is None:
         launch_template = _select_launch_template()
@@ -1812,41 +1810,6 @@ def _run_all_check(
 
     console.print()
 
-    # ── Step 3: Email Credentials ────────────────────────────────────────
-    console.rule("[bold cyan]Email Credentials[/bold cyan]")
-    console.print()
-
-    try:
-        folder_link = f"https://drive.google.com/drive/folders/{subfolder_id}"
-
-        subject = "Your Virtual Machine Access"
-        body_text = (
-            f"Hello,\n\n"
-            f"A virtual machine has been set up for you. Your SSH key and\n"
-            f"connection instructions are in the Google Drive folder below:\n\n"
-            f"    {folder_link}\n\n"
-            f"Open the folder and follow the instructions in the\n"
-            f"'Connection Details' document to get started.\n\n"
-            f"Best regards,\n{sender_name}\n"
-        )
-
-        with console.status(f"[bold green]Sending email to {test_email}...", spinner="dots"):
-            result = send_email(to=test_email, subject=subject, body_text=body_text)
-
-        if not result.get("success"):
-            raise RuntimeError(result.get("error", "unknown email error"))
-
-        console.print(f"[green]✓ Email sent to {test_email}[/green]")
-        step_results.append(("Email Credentials", "passed"))
-        passed += 1
-
-    except Exception as e:
-        step_results.append(("Email Credentials", f"error: {e}"))
-        failed += 1
-        console.print(f"\n[red]Email failed — {e}[/red]")
-
-    console.print()
-
     # ── Summary ──────────────────────────────────────────────────────────
     _run_all_check_summary(step_results, passed, failed)
 
@@ -1885,17 +1848,16 @@ def _run_all_check_summary(
 def run_all(
     course_id: Optional[str] = typer.Argument(None, help="Canvas course ID (prompted if omitted; ignored with --check)"),
     launch_template: Optional[str] = typer.Option(None, "--template", "-l", help="AWS Launch Template name or ID (prompted if omitted)"),
-    sender_name: str = typer.Option("Course Instructor", "--sender", "-s", help="Name to use in email signature"),
     check: bool = typer.Option(False, "--check", help="Run check versions of each step instead of real operations"),
     test_email: Optional[str] = typer.Option(None, "--test-email", "-t", help="Email address for --check mode (prompted if omitted)"),
 ):
-    """Run the full workflow: launch → share keys → email.
+    """Run the full workflow: launch → share keys.
 
-    Runs each step in order: launch VMs, share Drive folders, and email
-    students a link.
+    Runs each step in order: launch VMs, then share Drive folders with
+    students.  Google sends a notification email when the folder is shared.
 
     With [yellow]--check[/yellow], runs the real workflow against a single test
-    VM and sends a test email.
+    VM.
     Use [cyan]ec2 check-cleanup[/cyan] and [cyan]google check-cleanup[/cyan] afterwards.
     """
     init()
@@ -1904,7 +1866,7 @@ def run_all(
         email = test_email or typer.prompt(
             "Test email address", default="shanepanter@u.boisestate.edu",
         )
-        _run_all_check(launch_template=launch_template, sender_name=sender_name, test_email=email)
+        _run_all_check(launch_template=launch_template, test_email=email)
         return
 
     if course_id is None:
@@ -1915,20 +1877,15 @@ def run_all(
     console.print(Panel.fit(
         "[bold green]Full EC2 Workflow[/bold green]\n"
         f"Course ID: [cyan]{course_id}[/cyan]\n"
-        f"Launch Template: [yellow]{launch_template}[/yellow]\n"
-        f"Sender: [cyan]{sender_name}[/cyan]",
+        f"Launch Template: [yellow]{launch_template}[/yellow]",
         title="🚀 Run All",
     ))
 
     _cid = course_id
     _lt = launch_template
-    _sn = sender_name
     steps: list[tuple[str, object]] = [
         ("Launch VMs", lambda: launch_vms(course_id=_cid, launch_template=_lt)),
         ("Share Keys", lambda: share_keys(course_id=_cid)),
-        ("Email Credentials", lambda: ec2_email_credentials(
-            course_id=_cid, sender_name=_sn, all_students=True,
-        )),
     ]
 
     passed = 0
