@@ -178,3 +178,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 keys/
+
+# App specific files
+*.log
+*.csv
