@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import time
@@ -148,6 +149,33 @@ class EC2Provisioner:
             InstanceIds=instance_ids,
             WaiterConfig={"Delay": 15, "MaxAttempts": timeout // 15},
         )
+
+    def reboot_instances(
+        self, instance_ids: list[str], timeout: int = 300
+    ) -> dict[str, str]:
+        """Reboot instances and wait for them to be running again.
+
+        Returns a mapping of instance_id -> new public_ip.
+        """
+        self.ec2.reboot_instances(InstanceIds=instance_ids)
+        waiter = self.ec2.get_waiter("instance_running")
+        waiter.wait(
+            InstanceIds=instance_ids,
+            WaiterConfig={"Delay": 10, "MaxAttempts": timeout // 10},
+        )
+        return self._get_public_ips(instance_ids)
+
+    def _get_public_ips(self, instance_ids: list[str]) -> dict[str, str]:
+        """Return a mapping of instance_id -> public_ip for the given instances."""
+        ip_map: dict[str, str] = {}
+        desc = self.ec2.describe_instances(InstanceIds=instance_ids)
+        for reservation in desc["Reservations"]:
+            for inst in reservation["Instances"]:
+                iid: str = inst["InstanceId"]
+                pip: str = inst.get("PublicIpAddress", "")
+                if pip:
+                    ip_map[iid] = pip
+        return ip_map
 
     def wait_for_instances(
         self, instance_ids: list[str], timeout: int = 300
@@ -682,6 +710,109 @@ def cleanup_check_instances(
     ]
 
 
+def check_ssh_access(
+    course_id: str,
+    *,
+    instructor_key_path: str,
+    log_file: str = "ssh-failures.log",
+    ssh_timeout: int = 30,
+    progress_callback: Optional[Callable[[int, int, str], None]] = _default_progress,
+) -> list[dict[str, str]]:
+    """Check SSH access for all running EC2 instances in a course.
+
+    Iterates through every running instance tagged with *course_id*,
+    attempts an SSH connection using the instructor key, and writes
+    any failures to *log_file*.
+
+    Args:
+        course_id: Canvas course ID used when the instances were launched.
+        instructor_key_path: Path to the instructor PEM private key.
+        log_file: Path to write unreachable instance details.
+        ssh_timeout: Seconds to wait for each SSH connection attempt.
+        progress_callback: Optional callback for progress updates.
+
+    Returns:
+        List of dicts with: instance_id, student, public_ip, status.
+    """
+    ec2 = EC2Provisioner()
+
+    if progress_callback:
+        progress_callback(0, 0, "Finding running instances...")
+
+    instances = ec2.find_course_instances(course_id)
+    running = [i for i in instances if i["state"] == "running" and i["public_ip"]]
+
+    if not running:
+        if progress_callback:
+            progress_callback(0, 0, "No running instances with public IPs found.")
+        return []
+
+    total = len(running)
+    if progress_callback:
+        progress_callback(0, total, f"Checking SSH on {total} instance(s)...")
+
+    pkey = paramiko.RSAKey.from_private_key_file(instructor_key_path)
+    results: list[dict[str, str]] = []
+    failures: list[dict[str, str]] = []
+
+    for idx, inst in enumerate(running, 1):
+        iid = inst["instance_id"]
+        ip = inst["public_ip"]
+        student = inst["student"]
+
+        if progress_callback:
+            progress_callback(idx, total, f"SSH {student or iid} @ {ip}...")
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        status = "ok"
+
+        try:
+            ssh.connect(
+                hostname=ip,
+                username=SSH_USER,
+                pkey=pkey,
+                timeout=ssh_timeout,
+                auth_timeout=ssh_timeout,
+                banner_timeout=ssh_timeout,
+            )
+            ssh.close()
+        except (NoValidConnectionsError, SSHException, OSError, TimeoutError) as e:
+            status = f"unreachable: {e}"
+            failures.append({
+                "instance_id": iid,
+                "student": student,
+                "public_ip": ip,
+                "error": str(e),
+            })
+
+        results.append({
+            "instance_id": iid,
+            "student": student,
+            "public_ip": ip,
+            "status": status,
+        })
+
+    # Write failures to log file (JSON for machine-readability)
+    if failures:
+        log_data = {
+            "course_id": course_id,
+            "instances": failures,
+        }
+        with open(log_file, "w") as f:
+            json.dump(log_data, f, indent=2)
+            f.write("\n")
+
+    if progress_callback:
+        ok = sum(1 for r in results if r["status"] == "ok")
+        progress_callback(
+            total, total,
+            f"Done — {ok} reachable, {len(failures)} unreachable.",
+        )
+
+    return results
+
+
 SSH_SCRIPT_FILENAME = "ec2-ssh.sh"
 
 _SSH_SCRIPT_TEMPLATE = """\
@@ -769,3 +900,113 @@ def build_connection_doc(*, username: str, public_ip: str, instance_id: str) -> 
         f"- If the connection times out, the VM may still be starting up. Wait a minute and try again.\n"
         f"- If you have other issues, email your instructor for assistance.\n"
     )
+
+
+def reboot_failed_instances(
+    log_file: str = "ssh-failures.log",
+    *,
+    ssh_timeout: int = 300,
+    instructor_key_path: str,
+    progress_callback: Optional[Callable[[int, int, str], None]] = _default_progress,
+) -> list[dict[str, str]]:
+    """Reboot instances listed in the SSH failure log and return new IPs.
+
+    Reads the JSON log file produced by :func:`check_ssh_access`, reboots
+    every instance listed, waits for them to come back, and verifies SSH
+    connectivity with the instructor key.
+
+    Args:
+        log_file: Path to the JSON failure log written by ``check_ssh_access``.
+        ssh_timeout: Seconds to wait for SSH after reboot.
+        instructor_key_path: Path to the instructor PEM private key.
+        progress_callback: Optional callback for progress updates.
+
+    Returns:
+        List of dicts with: instance_id, student, old_ip, new_ip, status.
+    """
+    with open(log_file) as f:
+        log_data = json.load(f)
+
+    entries = log_data.get("instances", [])
+    if not entries:
+        return []
+
+    ec2 = EC2Provisioner()
+    instance_ids = [e["instance_id"] for e in entries]
+    total = len(instance_ids)
+
+    if progress_callback:
+        progress_callback(0, total, f"Rebooting {total} instance(s)...")
+
+    # Reboot and get new IPs
+    new_ip_map = ec2.reboot_instances(instance_ids)
+
+    # Verify SSH on each rebooted instance
+    pkey = paramiko.RSAKey.from_private_key_file(instructor_key_path)
+    results: list[dict[str, str]] = []
+
+    for idx, entry in enumerate(entries, 1):
+        iid = entry["instance_id"]
+        student = entry.get("student", "")
+        old_ip = entry.get("public_ip", "")
+        new_ip = new_ip_map.get(iid, "")
+
+        if not new_ip:
+            results.append({
+                "instance_id": iid,
+                "student": student,
+                "old_ip": old_ip,
+                "new_ip": "",
+                "status": "error: no public IP after reboot",
+            })
+            continue
+
+        if progress_callback:
+            progress_callback(idx, total, f"Verifying SSH {student or iid} @ {new_ip}...")
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        status = "ok"
+
+        connected = False
+        deadline = time.monotonic() + ssh_timeout
+        last_error = ""
+        while time.monotonic() < deadline:
+            try:
+                ssh.connect(
+                    hostname=new_ip,
+                    username=SSH_USER,
+                    pkey=pkey,
+                    timeout=10,
+                    auth_timeout=10,
+                    banner_timeout=10,
+                )
+                connected = True
+                ssh.close()
+                break
+            except (NoValidConnectionsError, SSHException, OSError, TimeoutError) as e:
+                last_error = str(e)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(10.0, remaining))
+
+        if not connected:
+            status = f"unreachable: {last_error}"
+
+        results.append({
+            "instance_id": iid,
+            "student": student,
+            "old_ip": old_ip,
+            "new_ip": new_ip,
+            "status": status,
+        })
+
+    if progress_callback:
+        ok = sum(1 for r in results if r["status"] == "ok")
+        progress_callback(
+            total, total,
+            f"Done — {ok} reachable, {total - ok} still unreachable.",
+        )
+
+    return results
